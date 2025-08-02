@@ -202,3 +202,119 @@
     )
   )
 )
+
+;; Create governance proposal for treasury allocation
+(define-public (create-proposal
+    (description (string-ascii 256))
+    (amount uint)
+    (target principal)
+    (duration uint)
+  )
+  (begin
+    (try! (check-initialized))
+    ;; Comprehensive input validation
+    (asserts! (> (len description) u0) err-invalid-description)
+    (asserts! (> amount u0) err-zero-amount)
+    (asserts! (not (is-eq target (as-contract tx-sender))) err-invalid-target)
+    (asserts! (and (>= duration minimum-duration) (<= duration maximum-duration))
+      err-invalid-duration
+    )
+    (let (
+        (proposer-balance (unwrap! (map-get? balances tx-sender) err-unauthorized))
+        (proposal-id (+ (var-get proposal-count) u1))
+      )
+      (asserts! (> proposer-balance u0) err-unauthorized)
+      ;; Create proposal with governance parameters
+      (map-set proposals proposal-id {
+        proposer: tx-sender,
+        description: description,
+        amount: amount,
+        target: target,
+        expires-at: (+ stacks-block-height duration),
+        executed: false,
+        yes-votes: u0,
+        no-votes: u0,
+      })
+      (var-set proposal-count proposal-id)
+      (ok proposal-id)
+    )
+  )
+)
+
+;; Vote on treasury proposals with weighted voting power
+(define-public (vote
+    (proposal-id uint)
+    (vote-for bool)
+  )
+  (begin
+    (try! (check-initialized))
+    (try! (validate-proposal-id proposal-id))
+    (let (
+        (proposal (unwrap! (map-get? proposals proposal-id) err-proposal-not-found))
+        (voter-power (calculate-voting-power tx-sender))
+      )
+      (asserts! (> voter-power u0) err-unauthorized)
+      (asserts! (< stacks-block-height (get expires-at proposal))
+        err-proposal-expired
+      )
+      (asserts!
+        (is-none (map-get? votes {
+          proposal-id: proposal-id,
+          voter: tx-sender,
+        }))
+        err-already-voted
+      )
+      ;; Record democratic vote with anti-manipulation protection
+      (map-set votes {
+        proposal-id: proposal-id,
+        voter: tx-sender,
+      }
+        vote-for
+      )
+      ;; Update weighted vote tallies
+      (map-set proposals proposal-id
+        (merge proposal {
+          yes-votes: (if vote-for
+            (+ (get yes-votes proposal) voter-power)
+            (get yes-votes proposal)
+          ),
+          no-votes: (if vote-for
+            (get no-votes proposal)
+            (+ (get no-votes proposal) voter-power)
+          ),
+        })
+      )
+      (ok true)
+    )
+  )
+)
+
+;; Execute approved treasury proposals
+(define-public (execute-proposal (proposal-id uint))
+  (begin
+    (try! (check-initialized))
+    (try! (validate-proposal-id proposal-id))
+    (let (
+        (proposal (unwrap! (map-get? proposals proposal-id) err-proposal-not-found))
+        (contract-balance (stx-get-balance (as-contract tx-sender)))
+      )
+      (asserts! (not (get executed proposal)) err-unauthorized)
+      (asserts! (>= stacks-block-height (get expires-at proposal))
+        err-proposal-expired
+      )
+      (asserts! (> (get yes-votes proposal) (get no-votes proposal))
+        err-unauthorized
+      )
+      (asserts! (>= contract-balance (get amount proposal))
+        err-insufficient-balance
+      )
+      ;; Execute democratic treasury allocation
+      (try! (as-contract (stx-transfer? (get amount proposal) (as-contract tx-sender)
+        (get target proposal)
+      )))
+      ;; Mark proposal as permanently executed
+      (map-set proposals proposal-id (merge proposal { executed: true }))
+      (ok true)
+    )
+  )
+)
