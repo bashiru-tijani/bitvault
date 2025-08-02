@@ -318,3 +318,36 @@
     )
   )
 )
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Get user's treasury token balance
+(define-read-only (get-balance (account principal))
+  (ok (default-to u0 (map-get? balances account)))
+)
+
+;; Get total treasury token supply
+(define-read-only (get-total-supply)
+  (ok (var-get total-supply))
+)
+
+;; Get detailed proposal information
+(define-read-only (get-proposal (proposal-id uint))
+  (ok (map-get? proposals proposal-id))
+)
+
+;; Get user's deposit and lock information
+(define-read-only (get-deposit-info (account principal))
+  (ok (map-get? deposits account))
+)
+
+;; Check user's vote on specific proposal
+(define-read-only (get-vote
+    (proposal-id uint)
+    (voter principal)
+  )
+  (ok (map-get? votes {
+    proposal-id: proposal-id,
+    voter: voter,
+  }))
+)
